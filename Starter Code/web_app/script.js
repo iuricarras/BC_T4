@@ -9,12 +9,12 @@ var GENESIS = '0x000000000000000000000000000000000000000000000000000000000000000
 
 // This is the ABI for your contract (get it from Remix, in the 'Compile' tab)
 // ============================================================
-var abi = []; // FIXME: fill this in with your contract's ABI //Be sure to only have one array, not two
+var abi = [{"type":"function","name":"addIOU","inputs":[{"name":"creditor","type":"address","internalType":"address"},{"name":"amount","type":"uint32","internalType":"uint32"}],"outputs":[],"stateMutability":"nonpayable"},{"type":"function","name":"lookup","inputs":[{"name":"debtor","type":"address","internalType":"address"},{"name":"creditor","type":"address","internalType":"address"}],"outputs":[{"name":"","type":"uint32","internalType":"uint32"}],"stateMutability":"view"}]; // FIXME: fill this in with your contract's ABI //Be sure to only have one array, not two
 // ============================================================
 abiDecoder.addABI(abi);
 // call abiDecoder.decodeMethod to use this - see 'getAllFunctionCalls' for more
 
-var contractAddress = ""; // FIXME: fill this in with your contract's address/hash
+var contractAddress = "0x8464135c8F25Da09e49BC8782676a84730C318bC"; // FIXME: fill this in with your contract's address/hash
 
 var BlockchainSplitwise = new ethers.Contract(contractAddress, abi, provider.getSigner());
 
@@ -27,26 +27,100 @@ var BlockchainSplitwise = new ethers.Contract(contractAddress, abi, provider.get
 // TODO: Return a list of all users (creditors or debtors) in the system
 // All users in the system are everyone who has ever sent or received an IOU
 async function getUsers() {
+	// ir buscar todas as chamadas da funçao 'add_IOU' no contrato
+	// It returns an array of objects, one for each call, containing the sender ('from'), arguments ('args'), and the timestamp ('t')
+	var functionCalls = await getAllFunctionCalls(contractAddress, 'addIOU');
+	var usersSet = new Set();
 
+	for (var i = 0; i < functionCalls.length; i++) {
+		var call = functionCalls[i];
+		usersSet.add(call.from.toLowerCase());
+		usersSet.add(call.args[0].toLowerCase()); // o creditor é o primeiro argumento
+	}
+
+	return Array.from(usersSet);
 }
 
 // TODO: Get the total amount owed by the user specified by 'user'
 async function getTotalOwed(user) {
+	var functionCalls = await getAllFunctionCalls(contractAddress, 'addIOU');
+	var totalOwed = 0;
 
+	if (functionCalls === null) {
+		return totalOwed;
+	}
+	
+	for (var i = 0; i < functionCalls.length; i++) {
+		var call = functionCalls[i];
+		if (call.from === user.toLowerCase()) {
+			console.log("Owed Amount Added:" + call.args[1]);
+			console.log("From User:" + user.toLowerCase());
+			console.log("To User:" + call.args[0]);
+			totalOwed += parseInt(call.args[1], 10); // o amount é o segundo argumento
+		}
+	}
+
+	return totalOwed;
 }
 
 // TODO: Get the last time this user has sent or received an IOU, in seconds since Jan. 1, 1970
 // Return null if you can't find any activity for the user.
 // HINT: Try looking at the way 'getAllFunctionCalls' is written. You can modify it if you'd like.
 async function getLastActive(user) {
+	// ir buscar todas as chamadas da funçao 'add_IOU' no contrato outra vez
+	var functionCalls = await getAllFunctionCalls(contractAddress, 'addIOU');
+	var lastActiveTime = null;
+
+	for (var i = 0; i < functionCalls.length; i++) {
+		var call = functionCalls[i];
+		if (call.from === user.toLowerCase() || call.args[0] === user.toLowerCase()) {
+			if (lastActiveTime === null || call.t > lastActiveTime) {
+				lastActiveTime = call.t;
+			}
+		}
+	}
 	
+	return lastActiveTime;
 }
 
 // TODO: add an IOU ('I owe you') to the system
 // The person you owe money is passed as 'creditor'
 // The amount you owe them is passed as 'amount'
 async function add_IOU(creditor, amount) {
-	
+	var path = await doBFS(creditor.toLowerCase(), defaultAccount.toLowerCase(), getNeighbors);
+	console.log("Default:" + defaultAccount.toLowerCase());
+	if (path !== null) { // ciclo :)
+		var minAmount = amount;
+		// encontrar o minimo
+		for (var i = 0; i < path.length - 1; i++) {
+			var owedAmount = await BlockchainSplitwise.lookup(path[i], path[i + 1]);
+			if (parseInt(owedAmount, 10) < minAmount) {
+				minAmount = parseInt(owedAmount, 10);
+			}
+		}
+
+		// atualizar os valores ao longo do ciclo
+		for (var i = 0; i < path.length - 1; i++) {
+			var from = path[i];
+			var to = path[i + 1];
+			var owedAmount = await BlockchainSplitwise.lookup(from, to);
+			var newAmount = parseInt(owedAmount, 10) - minAmount;
+			await BlockchainSplitwise.addIOU(to, newAmount);
+		}
+
+		if (minAmount === amount) {
+			return; // ja foi tudo compensado
+		} else {
+			amount = amount - minAmount; // o que falta adicionar
+		}
+	}
+
+
+	var owedAmount = await BlockchainSplitwise.lookup(defaultAccount.toLowerCase(), creditor.toLowerCase());
+	console.log("Owed Amount:" + owedAmount);
+
+
+	await BlockchainSplitwise.addIOU(creditor.toLowerCase(), owedAmount + amount, defaultAccount.toLowerCase());
 }
 
 // =============================================================================
@@ -87,6 +161,24 @@ async function getAllFunctionCalls(addressOfContract, functionName) {
 	}
 	return function_calls;
 }
+
+async function getNeighbors(node) {
+	var neighbors = [];
+	var users = await getUsers();
+
+	for (var i = 0; i < users.length; i++) {
+		var otherUser = users[i];
+		// if (otherUser.toLowerCase() !== node.toLowerCase()) {
+			var amountOwed = await BlockchainSplitwise.lookup(node.toLowerCase(), otherUser.toLowerCase());
+			if (parseInt(amountOwed, 10) > 0) {
+				neighbors.push(otherUser);
+			}
+		// }
+	}
+
+	return neighbors;
+}
+
 
 // We've provided a breadth-first search implementation for you, if that's useful
 // It will find a path from start to end (or return null if none exists)
@@ -131,6 +223,8 @@ provider.listAccounts().then((response)=> {
 $("#myaccount").change(function() {
 	defaultAccount = $(this).val();
 
+	console.log("Default account set to "+defaultAccount);
+
 	getTotalOwed(defaultAccount).then((response)=>{
 		$("#total_owed").html("$"+response);
 	})
@@ -158,8 +252,9 @@ getUsers().then((response)=>{
 // It passes the values from the two inputs above
 $("#addiou").click(function() {
 	defaultAccount = $("#myaccount").val(); //sets the default account
+	console.log("Adding IOU from "+defaultAccount+" to "+$("#creditor").val()+" of amount $"+$("#amount").val());
   add_IOU($("#creditor").val(), $("#amount").val()).then((response)=>{
-		window.location.reload(false); // refreshes the page after add_IOU returns and the promise is unwrapped
+		// window.location.reload(false); // refreshes the page after add_IOU returns and the promise is unwrapped
 	})
 });
 
@@ -200,6 +295,7 @@ async function sanityCheck() {
 	defaultAccount = accounts[0];
 
 	var users = await getUsers();
+	console.log("Users:", users);
 	score += check("getUsers() initially empty", users.length === 0);
 
 	var owed = await getTotalOwed(accounts[1]);
