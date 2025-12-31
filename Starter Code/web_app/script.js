@@ -14,7 +14,7 @@ var abi = [{"type":"function","name":"addIOU","inputs":[{"name":"creditor","type
 abiDecoder.addABI(abi);
 // call abiDecoder.decodeMethod to use this - see 'getAllFunctionCalls' for more
 
-var contractAddress = "0x8464135c8F25Da09e49BC8782676a84730C318bC"; // FIXME: fill this in with your contract's address/hash
+var contractAddress = "0x5FbDB2315678afecb367f032d93F642f64180aa3"; // FIXME: fill this in with your contract's address/hash
 
 var BlockchainSplitwise = new ethers.Contract(contractAddress, abi, provider.getSigner());
 
@@ -43,20 +43,14 @@ async function getUsers() {
 
 // TODO: Get the total amount owed by the user specified by 'user'
 async function getTotalOwed(user) {
-	var functionCalls = await getAllFunctionCalls(contractAddress, 'addIOU');
+	var users = await getUsers();
 	var totalOwed = 0;
 
-	if (functionCalls === null) {
-		return totalOwed;
-	}
-	
-	for (var i = 0; i < functionCalls.length; i++) {
-		var call = functionCalls[i];
-		if (call.from === user.toLowerCase()) {
-			console.log("Owed Amount Added:" + call.args[1]);
-			console.log("From User:" + user.toLowerCase());
-			console.log("To User:" + call.args[0]);
-			totalOwed += parseInt(call.args[1], 10); // o amount é o segundo argumento
+	for (var i = 0; i < users.length; i++) {
+		var creditor = users[i];
+		if (creditor.toLowerCase() !== user.toLowerCase()) {
+			var owedAmount = await BlockchainSplitwise.lookup(user.toLowerCase(), creditor.toLowerCase());
+			totalOwed += parseInt(owedAmount, 10);
 		}
 	}
 
@@ -87,17 +81,27 @@ async function getLastActive(user) {
 // The person you owe money is passed as 'creditor'
 // The amount you owe them is passed as 'amount'
 async function add_IOU(creditor, amount) {
-	var path = await doBFS(creditor.toLowerCase(), defaultAccount.toLowerCase(), getNeighbors);
-	console.log("Default:" + defaultAccount.toLowerCase());
-	if (path !== null) { // ciclo :)
+	amount = parseInt(amount, 10);
+	creditor = creditor.toLowerCase();
+	var debtor = defaultAccount.toLowerCase();
+	
+	console.log("Default:" + debtor);
+	console.log("Creditor:" + creditor);
+	
+	var path = await doBFS(creditor, debtor, getNeighbors);
+	console.log("Path encontrado:", path);
+	
+	if (path !== null) { 
 		var minAmount = amount;
-		// encontrar o minimo
+		
 		for (var i = 0; i < path.length - 1; i++) {
 			var owedAmount = await BlockchainSplitwise.lookup(path[i], path[i + 1]);
 			if (parseInt(owedAmount, 10) < minAmount) {
 				minAmount = parseInt(owedAmount, 10);
 			}
 		}
+		
+		console.log("minAmount:" + minAmount);
 
 		// atualizar os valores ao longo do ciclo
 		for (var i = 0; i < path.length - 1; i++) {
@@ -105,22 +109,21 @@ async function add_IOU(creditor, amount) {
 			var to = path[i + 1];
 			var owedAmount = await BlockchainSplitwise.lookup(from, to);
 			var newAmount = parseInt(owedAmount, 10) - minAmount;
-			await BlockchainSplitwise.addIOU(to, newAmount);
+			var fromSigner = provider.getSigner(from);
+			await BlockchainSplitwise.connect(fromSigner).addIOU(to, newAmount);
 		}
 
-		if (minAmount === amount) {
-			return; // ja foi tudo compensado
+		if (amount === minAmount) {
+			return; // tudo foi compensado pelo ciclo
 		} else {
-			amount = amount - minAmount; // o que falta adicionar
+			amount = amount - minAmount;
 		}
 	}
 
+	var owedAmount = parseInt(await BlockchainSplitwise.lookup(debtor, creditor), 10);
 
-	var owedAmount = await BlockchainSplitwise.lookup(defaultAccount.toLowerCase(), creditor.toLowerCase());
-	console.log("Owed Amount:" + owedAmount);
-
-
-	await BlockchainSplitwise.addIOU(creditor.toLowerCase(), owedAmount + amount, defaultAccount.toLowerCase());
+	var signer = provider.getSigner(defaultAccount);
+	await BlockchainSplitwise.connect(signer).addIOU(creditor, owedAmount + amount);
 }
 
 // =============================================================================
@@ -168,17 +171,16 @@ async function getNeighbors(node) {
 
 	for (var i = 0; i < users.length; i++) {
 		var otherUser = users[i];
-		// if (otherUser.toLowerCase() !== node.toLowerCase()) {
+		if (otherUser.toLowerCase() !== node.toLowerCase()) {
 			var amountOwed = await BlockchainSplitwise.lookup(node.toLowerCase(), otherUser.toLowerCase());
 			if (parseInt(amountOwed, 10) > 0) {
 				neighbors.push(otherUser);
 			}
-		// }
+		}
 	}
 
 	return neighbors;
 }
-
 
 // We've provided a breadth-first search implementation for you, if that's useful
 // It will find a path from start to end (or return null if none exists)

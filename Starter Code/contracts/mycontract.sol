@@ -18,10 +18,8 @@ contract Splitwise {
         return ret;
     }
 
-    function addIOU(address creditor, uint32 amount, address debtor) public {
+    function addIOU(address creditor, uint32 amount) public {
         // Informs the contract that msg.sender now owes amount more dollars to creditor
-
-        vm.prank(debtor);
 
         require(amount >= 0, "Amount can't be negative");                          
         dividas[msg.sender][creditor] = amount;
